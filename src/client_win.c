@@ -19,19 +19,30 @@ void func(SOCKET sockfd) {
     int n;
     for (;;) {
         memset(buff, 0, sizeof(buff));
-        printf("Enter the string: ");
+        printf("Enter input (format I|player|button) or 'exit' to quit: ");
         n = 0;
-        while ((buff[n++] = getchar()) != '\n');
+        while ((buff[n++] = getchar()) != '\n' && n < MAX);
 
-        send(sockfd, buff, sizeof(buff), 0);
-        memset(buff, 0, sizeof(buff));
-        recv(sockfd, buff, sizeof(buff), 0);
-        printf("From Server: %s", buff);
+        // Remove trailing newline from input
+        if (buff[n - 1] == '\n') {
+            buff[n - 1] = '\0';
+        }
 
-        if ((strncmp(buff, "exit", 4)) == 0) {
+        send(sockfd, buff, strlen(buff), 0);
+
+        if (strncmp(buff, "exit", 4) == 0) {
             printf("Client Exit...\n");
             break;
         }
+
+        memset(buff, 0, sizeof(buff));
+        int bytesReceived = recv(sockfd, buff, sizeof(buff) - 1, 0);
+        if (bytesReceived <= 0) {
+            printf("Connection closed by server or error.\n");
+            break;
+        }
+        buff[bytesReceived] = '\0';
+        printf("From Server: %s\n", buff);
     }
 }
 
