@@ -1,6 +1,3 @@
-//
-// Created by g0mes on 20/05/2025.
-//
 // client_win.c
 
 #include <stdio.h>
@@ -14,7 +11,12 @@
 #define PORT 8080
 #define SA struct sockaddr
 
-void func(SOCKET sockfd) {
+void log_message(FILE *logFile, const char *prefix, const char *message) {
+    fprintf(logFile, "%s: %s\n", prefix, message);
+    fflush(logFile);
+}
+
+void func(SOCKET sockfd, FILE* logFile) {
     char buff[MAX];
     int n;
     for (;;) {
@@ -37,8 +39,12 @@ void func(SOCKET sockfd) {
 
         memset(buff, 0, sizeof(buff));
         int bytesReceived = recv(sockfd, buff, sizeof(buff) - 1, 0);
-        if (bytesReceived <= 0) {
-            printf("Connection closed by server or error.\n");
+        if (bytesReceived == 0) {
+            printf("Server disconnected gracefully.\n");
+            break;
+        }
+        if (bytesReceived < 0) {
+            printf("Recv error or connection lost.\n");
             break;
         }
         buff[bytesReceived] = '\0';
@@ -51,14 +57,23 @@ int main() {
     SOCKET sockfd;
     struct sockaddr_in servaddr;
 
+    FILE *logFile = fopen("client_log.txt", "a");
+    if (!logFile) {
+        printf("Failed to open log file.\n");
+        return 1;
+    }
+
     WSAStartup(MAKEWORD(2, 2), &wsa);
 
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd == INVALID_SOCKET) {
         printf("Socket creation failed...\n");
+        fprintf(logFile, "Error: Socket creation failed\n");
+        fclose(logFile);
         return 1;
     }
     printf("Socket successfully created..\n");
+    fprintf(logFile, "Status: Socket created\n");
 
     servaddr.sin_family = AF_INET;
     servaddr.sin_addr.s_addr = inet_addr("127.0.0.1");
@@ -66,15 +81,20 @@ int main() {
 
     if (connect(sockfd, (SA*)&servaddr, sizeof(servaddr)) != 0) {
         printf("Connection with the server failed...\n");
+        fprintf(logFile, "Error: Connection with the server failed\n");
         closesocket(sockfd);
         WSACleanup();
+        fclose(logFile);
         return 1;
     }
     printf("Connected to the server..\n");
+    fprintf(logFile, "Status: Connected to server\n");
 
-    func(sockfd);
+    func(sockfd, logFile);
 
     closesocket(sockfd);
     WSACleanup();
+    fprintf(logFile, "Status: Socket closed, cleanup done\n");
+    fclose(logFile);
     return 0;
 }
