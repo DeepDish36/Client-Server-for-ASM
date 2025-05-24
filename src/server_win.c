@@ -6,12 +6,18 @@
 #include <winsock2.h>
 #include <ctype.h>   // for isdigit()
 #include <time.h>    // for timestamps
+#include <process.h> // for _beginthreadex
 
 #pragma comment(lib, "ws2_32.lib")  // Link with Winsock library
 
 #define MAX 80
 #define PORT 8080
 #define SA struct sockaddr
+
+typedef struct {
+    SOCKET connfd;
+    FILE* logFile;
+} ClientArgs;
 
 // Log with timestamp
 void log_to_file(FILE* logFile, const char* message) {
@@ -41,62 +47,49 @@ int validate_input(const char* input) {
     return 1;
 }
 
-void func(SOCKET connfd, FILE* logFile) {
+// Thread function for handling each client
+unsigned __stdcall client_handler(void* arg) {
+    ClientArgs* clientArgs = (ClientArgs*)arg;
+    SOCKET connfd = clientArgs->connfd;
+    FILE* logFile = clientArgs->logFile;
     char buff[MAX];
-    int n;
 
     for (;;) {
         memset(buff, 0, sizeof(buff));
         int bytesReceived = recv(connfd, buff, sizeof(buff) - 1, 0);
-        if (bytesReceived == 0) {
-            printf("Client disconnected gracefully.\n");
+        if (bytesReceived <= 0) {
+            printf("Client disconnected or error.\n");
             break;
         }
-        if (bytesReceived < 0) {
-            printf("Recv error or connection lost.\n");
-            break;
-        }
-        buff[bytesReceived] = '\0';  // Null-terminate string
 
+        buff[bytesReceived] = '\0';
         printf("From client (raw): %s\t", buff);
 
         if (!validate_input(buff)) {
-            printf("Invalid input format received.\n");
             const char* errMsg = "ERR|Invalid input format";
             send(connfd, errMsg, strlen(errMsg), 0);
             continue;
         }
 
-        // Parse the input format: I|player|button
-        char *token;
         char inputType[10], player[10], button[10];
-
-        token = strtok(buff, "|");
-        if (token != NULL) strcpy(inputType, token);
-        else strcpy(inputType, "Unknown");
-
-        token = strtok(NULL, "|");
-        if (token != NULL) strcpy(player, token);
-        else strcpy(player, "?");
-
-        token = strtok(NULL, "|");
-        if (token != NULL) strcpy(button, token);
-        else strcpy(button, "?");
+        sscanf(buff, "I|%[^|]|%s", player, button);
+        strcpy(inputType, "I");
 
         printf("Parsed Input: %s, Player %s, %s button\n", inputType, player, button);
 
-        // Send structured ACK message
         char ackMsg[MAX];
         snprintf(ackMsg, sizeof(ackMsg), "ACK|%s|%s|%s", inputType, player, button);
         send(connfd, ackMsg, strlen(ackMsg), 0);
 
-        if (strncmp(inputType, "exit", 4) == 0) {
-            printf("Server Exit...\n");
+        if (strncmp(inputType, "exit", 4) == 0)
             break;
-        }
     }
-}
 
+    closesocket(connfd);
+    free(clientArgs);
+    _endthreadex(0);
+    return 0;
+}
 
 int main() {
     WSADATA wsa;
@@ -115,7 +108,7 @@ int main() {
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd == INVALID_SOCKET) {
         printf("Socket creation failed...\n");
-        fprintf(logFile, "Socket creation failed.\n");
+        log_to_file(logFile, "Socket creation failed.");
         fclose(logFile);
         return 1;
     }
@@ -148,25 +141,33 @@ int main() {
     printf("Server listening..\n");
     log_to_file(logFile, "Server listening.");
 
-    len = sizeof(cli);
-    connfd = accept(sockfd, (SA*)&cli, &len);
-    if (connfd == INVALID_SOCKET) {
-        printf("Server accept failed...\n");
-        log_to_file(logFile, "Server accept failed.");
-        closesocket(sockfd);
-        WSACleanup();
-        fclose(logFile);
-        return 1;
+    while (1) {
+        len = sizeof(cli);
+        connfd = accept(sockfd, (SA*)&cli, &len);
+        if (connfd == INVALID_SOCKET) {
+            printf("Accept failed.\n");
+            continue;
+        }
+
+        printf("Client connected.\n");
+        log_to_file(logFile, "Client connected.");
+
+        ClientArgs* clientArgs = malloc(sizeof(ClientArgs));
+        clientArgs->connfd = connfd;
+        clientArgs->logFile = logFile;
+
+        uintptr_t threadHandle = _beginthreadex(NULL, 0, client_handler, clientArgs, 0, NULL);
+        if (threadHandle == 0) {
+            printf("Failed to create thread.\n");
+            closesocket(connfd);
+            free(clientArgs);
+        } else {
+            CloseHandle((HANDLE)threadHandle);
+        }
     }
-    printf("Server accepted the client...\n");
-    log_to_file(logFile, "Client connected.");
 
-    func(connfd, logFile);
-
-    closesocket(connfd);
     closesocket(sockfd);
     WSACleanup();
-    log_to_file(logFile, "Server shut down.");
     fclose(logFile);
     return 0;
 }
